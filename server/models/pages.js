@@ -80,6 +80,14 @@ module.exports = class Page extends Model {
           to: 'pageLinks.pageId'
         }
       },
+      backLinks: {
+        relation: Model.HasManyRelation,
+        modelClass: require('./pageLinks'),
+        join: {
+          from: 'pages.path',
+          to: 'pageLinks.path'
+        }
+      },
       author: {
         relation: Model.BelongsToOneRelation,
         modelClass: require('./users'),
@@ -162,7 +170,14 @@ module.exports = class Page extends Model {
       },
       title: 'string',
       toc: 'string',
-      updatedAt: 'string'
+      updatedAt: 'string',
+      backLinkPages: [
+        {
+          id: 'uint',
+          path: 'string',
+          title: 'string'
+        }
+      ]
     })
   }
 
@@ -976,8 +991,9 @@ module.exports = class Page extends Model {
    */
   static async getPageFromDb(opts) {
     const queryModeID = _.isNumber(opts)
+    let page, backLink, backLinkPage,promises = []
     try {
-      return WIKI.models.pages.query()
+      page = await WIKI.models.pages.query()
         .column([
           'pages.id',
           'pages.path',
@@ -1013,6 +1029,10 @@ module.exports = class Page extends Model {
         .modifyGraph('tags', builder => {
           builder.select('tag', 'title')
         })
+        .withGraphFetched('backLinks')
+        .modifyGraph('backLinks', builder => {
+          builder.select('path', 'pageId', 'localeCode')
+        })
         .where(queryModeID ? {
           'pages.id': opts
         } : {
@@ -1037,10 +1057,20 @@ module.exports = class Page extends Model {
         //   }
         // })
         .first()
+      if (page && page.backLinks && page.backLinks.length) {
+        page.backLinks = page.backLinks.filter((link)=>{
+          return link.localeCode === page.localeCode
+        })
+        for (backLink of page.backLinks) {
+          promises.push(backLink.$relatedQuery('page').column(['id', 'path', 'title']))
+        }
+        page.backLinkPages = await Promise.all(promises)
+      }
     } catch (err) {
       WIKI.logger.warn(err)
       throw err
     }
+    return page
   }
 
   /**
@@ -1073,7 +1103,8 @@ module.exports = class Page extends Model {
       tags: page.tags.map(t => _.pick(t, ['tag', 'title'])),
       title: page.title,
       toc: _.isString(page.toc) ? page.toc : JSON.stringify(page.toc),
-      updatedAt: page.updatedAt
+      updatedAt: page.updatedAt,
+      backLinkPages: page.backLinkPages
     }))
   }
 
